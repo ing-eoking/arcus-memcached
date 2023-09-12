@@ -48,7 +48,7 @@ static inline void UNLOCK_CACHE(void)
 {
     pthread_mutex_unlock(&engine->cache_lock);
 }
-
+void print_btree(btree_indx_node *root, bool dir);
 /* bkey type */
 #define BKEY_TYPE_UNKNOWN 0
 #define BKEY_TYPE_UINT64  1
@@ -1013,55 +1013,67 @@ static int do_btree_bkey_search(btree_indx_node *node, btree_elem_posi *path,
     return -1;
 }
 
-static bool do_btree_find_first2(btree_indx_node *root,
-                                            const int bkrtype, const bkey_range *bkrange,
-                                            btree_elem_posi (*path)[BTREE_MAX_DEPTH], const bool path_flag,
-                                            btree_elem_item **elem)
+static bool do_btree_find_double(btree_indx_node *root,
+                                 const int bkrtype, const bkey_range *bkrange,
+                                 btree_elem_posi *s_path, btree_elem_posi *e_path,
+                                 btree_elem_item *s_elem, btree_elem_item *e_elem,
+                                 const bool path_flag)
 {
-    btree_indx_node *node[2];
-    const int idx = (bkrtype != BKEY_RANGE_TYPE_ASC);
+    const bool f = (bkrtype == BKEY_RANGE_TYPE_DSC) ? 1 : 0;
 
     if (bkrange == NULL) {
         assert(bkrtype != BKEY_RANGE_TYPE_SIN);
-        path[idx][0].node = do_btree_get_first_leaf(root, (path_flag ? path[idx] : NULL));
-        path[idx][0].indx = 0;
-        path[!idx][0].node = do_btree_get_last_leaf(root, (path_flag ? path[!idx] : NULL));
-        path[!idx][0].indx = path[!idx][0].node->used_count - 1;
 
-        elem[idx] = BTREE_GET_ELEM_ITEM(path[idx][0].node, path[idx][0].indx);
-        elem[!idx] = BTREE_GET_ELEM_ITEM(path[!idx][0].node, path[!idx][0].indx);
+        btree_elem_posi *path[2] = {s_path, e_path};
+        btree_elem_item *elem[2] = {s_elem, e_elem};
+
+        path[f][0].node = do_btree_get_first_leaf(root, (path_flag ? path[f] : NULL));
+        path[f][0].indx = 0;
+        path[!f][0].node = do_btree_get_last_leaf(root, (path_flag ? path[!f] : NULL));
+        path[!f][0].indx = path[!f][0].node->used_count - 1;
+
+        elem[f] = BTREE_GET_ELEM_ITEM(path[f][0].node, path[f][0].indx);
+        elem[!f] = BTREE_GET_ELEM_ITEM(path[!f][0].node, path[!f][0].indx);
         assert(elem[0] != NULL && elem[1] != NULL);
+
         return true;
     }
     else {
-        const int ADD = -idx*2 + 1;
-        unsigned char (*bkey)[MAX_BKEY_LENG] = &(bkrange->from_bkey);
-        uint8_t *nbkey = &(bkrange->from_nbkey);
-        int i, elem_indx;
-        for(i = idx; i != !idx + ADD; i += ADD){
-            /* find leaf node */
-            path[i][0].node = do_btree_find_leaf(root, *bkey, *nbkey,
-                                                (path_flag ? path[i] : NULL), &elem[i]);
-            if(elem[i] == NULL) {
-                elem_indx = do_btree_bkey_search(path[i][0].node, path, *bkey, *nbkey, i + 1);
-                if(elem_indx < 0){;
-                    return false;
-                }
-                path[i][0].indx = (uint16_t)elem_indx;
-                elem[i] = BTREE_GET_ELEM_ITEM(path[i][0].node, path[i][0].indx);
-            }
-            else {
-                path[i][0].bkeq = true;
-                path[i][0].indx = 0;
-            }
-            bkey++;
-            nbkey++;
+        int elem_indx;
+        s_path[0].node = do_btree_find_leaf(root, bkrange->from_bkey, bkrange->from_nbkey,
+                                           (path_flag ? s_path : NULL), s_elem);
+        if(s_elem == NULL) {
+            elem_indx = do_btree_bkey_search(s_path[0].node, s_path,
+                                             bkrange->from_bkey, bkrange->from_nbkey,
+                                             f ? BKEY_LOWER_BOUND : BKEY_UPPER_BOUND);
+            if(elem_indx < 0) return false;
+            s_path[0].indx = (uint16_t)elem_indx;
+            s_elem = BTREE_GET_ELEM_ITEM(s_path[0].node, s_path[0].indx);
+        }
+        else {
+            s_path[0].bkeq = true;
+            s_path[0].indx = 0;
+        }
+
+        e_path[0].node = do_btree_find_leaf(root, bkrange->to_bkey, bkrange->to_nbkey,
+                                           (path_flag ? e_path : NULL), &e_elem);
+        if(e_elem == NULL) {
+            elem_indx = do_btree_bkey_search(e_path[0].node, e_path,
+                                             bkrange->to_bkey, bkrange->to_nbkey,
+                                             f ? BKEY_UPPER_BOUND : BKEY_LOWER_BOUND);
+            if(elem_indx < 0) return false;
+            e_path[0].indx = (uint16_t)elem_indx;
+            e_elem = BTREE_GET_ELEM_ITEM(e_path[0].node, e_path[0].indx);
+        }
+        else {
+            e_path[0].bkeq = true;
+            e_path[0].indx = 0;
         }
     }
-
-    if (BKEY_ISGT(elem[0]->data, elem[0]->nbkey, elem[1]->data, elem[1]->nbkey))
+    if ((!f && BKEY_ISGT(s_elem->data, s_elem->nbkey, e_elem->data, e_elem->nbkey))
+      || (f && BKEY_ISLT(s_elem->data, s_elem->nbkey, e_elem->data, e_elem->nbkey))) {
         return false;
-
+    }
     return true;
 }
 
@@ -1983,22 +1995,31 @@ static int do_btree_elem_delete_fast(btree_meta_info *info,
 }
 #endif
 
-static void do_btree_node_detach_range(btree_indx_node *start, btree_indx_node *end)
+static uint32_t do_btree_detach_leaf(const int bkrtype,
+                                     btree_elem_posi *s_posi, btree_elem_posi *e_posi,
+                                     const eflag_filter *efilter, const uint32_t offset,
+                                     btree_elem_item **elem_array,
+                                     uint32_t *opcost)
 {
-    /* unlink the given node from b+tree */
-    if (end->next == start || start->prev == end) return;
+    bool forward = (bkrtype == BKEY_RANGE_TYPE_DSC ? false : true);
+    btree_elem_posi c_posi = *s_posi;
+    uint32_t skip_cnt = 0;
+    btree_elem_item *elem;
 
-    if (start->prev != NULL) start->prev->next = end->next;
-    if (end->next != NULL)   end->next->prev = start->prev;
-    start->prev = end->next = NULL;
+    do {
+        elem = BTREE_GET_ELEM_ITEM(c_posi.node, c_posi.indx);
+        if (opcost) *opcost += 1;
+        if (efilter == NULL || do_btree_elem_filter(elem, efilter)) {
+            if (skip_cnt < offset) {
+                skip_cnt++;
+            }
+        }
 
-    btree_indx_node *piv;
 
-    while((piv = start) != NULL) {
-        start = start->next;
-        piv->prev = piv->next = NULL;
-        do_btree_node_free(piv);
-    }
+    } while(c_posi.node != e_posi->node
+         && c_posi.indx != e_posi->indx);
+
+
 
 }
 
@@ -2010,11 +2031,11 @@ static uint32_t do_btree_elem_delete(btree_meta_info *info,
                                      enum elem_delete_cause cause)
 {
     btree_indx_node *root = info->root;
-    btree_elem_item *elem, *elem2[2];
-    btree_elem_posi path[BTREE_MAX_DEPTH], path2[2][BTREE_MAX_DEPTH];
+    btree_elem_item *elem;
+    btree_elem_item *s_elem = NULL, *e_elem = NULL;
+    btree_elem_posi path[BTREE_MAX_DEPTH];
+    btree_elem_posi s_path[BTREE_MAX_DEPTH], e_path[BTREE_MAX_DEPTH];
     uint32_t tot_found = 0; /* found count */
-    bool idx = bkrtype == BKEY_RANGE_TYPE_DSC ? 0 : 1;
-    int i;
 
     if (opcost) *opcost = 0;
     if (root == NULL) return 0;
@@ -2023,21 +2044,18 @@ static uint32_t do_btree_elem_delete(btree_meta_info *info,
     elem = do_btree_find_first(root, bkrtype, bkrange, path, true);
 
     print_btree(root, true);
-
-    if(!do_btree_find_first2(root, bkrtype, bkrange, path2, true, elem2)){
+    /*if(!do_btree_find_double(root, bkrtype, bkrange,
+                             s_path, e_path, s_elem, e_elem, true)) {
         return 0;
     }
 
-    for(i = 0; i <= root->ndepth; i++){
-        if(path2[0][i].node == path2[1][i].node) break;
-        do_btree_node_detach_range(path2[0][i].node->next, path2[1][i].node->prev);
+    printf("<TEST PATH>\n");
+    for(int i = root->ndepth; i >= 0; i--){
+        printf("%d %d\n", s_path[i].indx, e_path[i].indx);
     }
-    print_btree(root, true);
+    printf("</TEST PATH>\n");*/
 
 
-    //uint64_t* b1 = (uint64_t *)(path[idx].node->item[path[idx].indx]);
-
-    //printf("<TEST : %lu\n", *b1);
 
     if (elem == NULL) return 0;
 
@@ -4796,6 +4814,4 @@ void print_btree(btree_indx_node *root, bool dir){
         if(node->ndepth == 0) break;
         if(node->ndepth > 0) node = (btree_indx_node *)(node->item[0]);
     }
-
-    return node;
 }

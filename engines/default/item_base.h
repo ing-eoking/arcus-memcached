@@ -279,7 +279,7 @@ typedef struct _map_meta_info {
 
 /* btree meta info */
 #define BTREE_MAX_DEPTH  7
-#define BTREE_ITEM_COUNT 3 /* Recommend BTREE_ITEM_COUNT >= 8 */
+#define BTREE_ITEM_COUNT 8 /* Recommend BTREE_ITEM_COUNT >= 8 */
 
 typedef struct _btree_leaf_node {
     uint16_t refcount;
