@@ -1,0 +1,22 @@
+name: CI
+
+on:
+  push:
+      branches: [ "master" ]
+  pull_request:
+      branches: [ "develop" ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    - name: Dependencies
+      run: sudo apt-get install libevent-dev
+    - name: Builds
+      run: |
+          ./config/autorun.sh
+          ./configure
+          make
+    - name: Test
+      run: make test
