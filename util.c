@@ -80,7 +80,7 @@ bool safe_strtoul(const char *str, uint32_t *out) {
 
     if (isspace(*endptr) || (*endptr == '\0' && endptr != str)) {
         if ((long) l < 0) {
-            /* only check for negative signs in the uncommon case when
+            /* only   check for negative signs in the uncommon case when
              * the unsigned number is so big that it's negative as a
              * signed number. */
             if (strchr(str, '-') != NULL) {
