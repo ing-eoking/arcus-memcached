@@ -19,7 +19,7 @@ int main(int argc, char **argv) {
     printf("----------------------------------------\n");
 
     display("libevent thread cumulative", sizeof(LIBEVENT_THREAD));
-    display("Thread stats cumulative\t", sizeof(struct thread_stats));
+    display("Thread stats cumulative \t", sizeof(struct thread_stats));
 
     return 0;
 }
