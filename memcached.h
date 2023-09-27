@@ -582,6 +582,7 @@ extern int daemonize(int nochdir, int noclose);
 #endif
 
 #include "stats.h"
+#include "mem_stats.h"
 #include "trace.h"
 #include "hash.h"
 #include <memcached/util.h>
