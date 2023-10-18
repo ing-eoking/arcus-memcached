@@ -60,6 +60,9 @@
 #include <ctype.h>
 #include <stdarg.h>
 #include <stddef.h>
+#include <lua.h>
+#include <lualib.h>
+#include <lauxlib.h>
 
 
 /* Lock for global stats */
@@ -97,6 +100,8 @@ volatile sig_atomic_t memcached_shutdown=0;
  */
 volatile rel_time_t current_time;
 static time_t process_started; /* when the process was started */
+
+lua_State* L;
 
 /** exported globals **/
 struct settings settings;
@@ -8342,13 +8347,13 @@ static inline void process_get_command(conn *c, token_t *tokens, size_t ntokens,
             /* do get operation for each key */
             ret = process_get_single(c, key_token->value, key_token->length,
                                      return_cas);
+
             if (ret != ENGINE_SUCCESS) {
                 break; /* ret == ENGINE_ENOMEM */
             }
             key_token++;
         }
         if (ret != ENGINE_SUCCESS) break;
-
         /* If the command string hasn't been fully processed, get the next set of tokens. */
         if (key_token->value != NULL) {
             /* The next reserved token has the length of untokenized command. */
@@ -8357,7 +8362,6 @@ static inline void process_get_command(conn *c, token_t *tokens, size_t ntokens,
             key_token = tokens;
         }
     } while(key_token->value != NULL);
-
     /* Some items and suffixes might have saved in the above execution.
      * To release the items and free the suffixes, the below code is needed.
      */
@@ -8369,8 +8373,9 @@ static inline void process_get_command(conn *c, token_t *tokens, size_t ntokens,
          * performed later by calling out_string() function.
          * See conn_write() and conn_mwrite() state.
          */
-        if (ret == ENGINE_EINVAL)
+        if (ret == ENGINE_EINVAL){
             out_string(c, "CLIENT_ERROR bad command line format");
+        }
         else /* ret == ENGINE_ENOMEM */
             out_string(c, "SERVER_ERROR out of memory writing get response");
         return;
@@ -13072,6 +13077,71 @@ static void process_setattr_command(conn *c, token_t *tokens, const size_t ntoke
         else handle_unexpected_errorcode_ascii(c, __func__, ret);
     }
 }
+static int lua_command(lua_State *L)
+{
+    int i;
+    token_t tokens[MAX_TOKENS+1];
+    lua_getglobal(L, "conn");
+    struct conn *c = (conn *)lua_touserdata(L, -1);
+    lua_getglobal(L, "numkey");
+    size_t numkey = (size_t)lua_tonumber(L, -1);
+    const char *cmd = lua_tostring(L, 1);
+    if(!strcmp(cmd, "GET")) {
+        tokens[0].value = "get";
+        tokens[0].length = 3;
+        for(i = 1; i <= numkey; i++) {
+            tokens[i].value = (char *)lua_tostring(L, 1+i);
+            tokens[i].length = strlen(tokens[i].value);
+        }
+        tokens[i].value = NULL;
+        tokens[i].length = 0;
+        process_get_command(c, tokens, 1 + numkey, false);
+    }
+    return 0;
+}
+
+static void process_lua_command(conn *c, token_t *tokens, size_t ntokens)
+{
+    lua_pushlightuserdata(L, c);
+    lua_setglobal(L, "conn");
+    if(ntokens > 2) {
+        int i, j = 0, k = 0;
+        char buf[2048] = "";
+        char *st = buf, *ed = buf;
+
+        for(i = 1; i < ntokens && *ed != '\"'; i++) {
+            st = tokens[i].value;
+            ed = &tokens[i].value[tokens[i].length - 1];
+            if(*st == '\"') st++;
+            if(ed - st < 0) break;
+            strncat(buf, st, ed - st + (int)(*ed != '\"'));
+            strcat(buf, " ");
+        }
+
+        if(ntokens > i + 1) {
+            size_t numkey = atoi(tokens[i++].value);
+            lua_pushnumber(L, numkey);
+            lua_setglobal(L, "numkey");
+            for (j = 0; j < numkey && i + j < ntokens; j++) {
+                char key[1024];
+                sprintf(key, "KEY%d", j); /* But, redis use table variable... */
+                lua_pushstring(L, tokens[i+j].value);
+                lua_setglobal(L, key);
+            }
+            for (k = 0; i + j + k < ntokens; k++) {
+                char arg[1024];
+                sprintf(arg, "ARG%d", k); /* Same to this one:( */
+                lua_pushstring(L, tokens[i+j+k].value);
+                lua_setglobal(L, arg);
+            }
+        }
+        luaL_dostring(L, buf);
+        if(c->iovused == 0) {
+            out_string(c, lua_tostring(L, -1));
+        }
+    }
+
+}
 
 static void process_command_ascii(conn *c, char *command, int cmdlen)
 {
@@ -13240,6 +13310,10 @@ static void process_command_ascii(conn *c, char *command, int cmdlen)
         process_lqdetect_command(c, tokens, ntokens);
     }
 #endif
+    else if ((ntokens >= 2) && (strcmp(tokens[COMMAND_TOKEN].value, "lua") == 0))
+    {
+        process_lua_command(c, tokens, ntokens);
+    }
     else /* no matching command */
     {
         if (settings.extensions.ascii != NULL) {
@@ -15079,6 +15153,21 @@ static void close_listen_sockets(void)
     }
 }
 
+
+static void init_lua(void)
+{
+    L = luaL_newstate();
+    luaL_openlibs(L);
+
+    lua_newtable(L);
+    for(int i = 0; i < 1; i++) {
+        lua_pushstring(L, "call");
+        lua_pushcfunction(L, lua_command);
+        lua_settable(L, -3);
+    }
+    lua_setglobal(L, "arcus");
+}
+
 int main (int argc, char **argv)
 {
     int c;
@@ -15415,6 +15504,7 @@ int main (int argc, char **argv)
             return 1;
         }
     }
+    init_lua();
 
     old_opts += sprintf(old_opts, "num_threads=%lu;", (unsigned long)settings.num_threads);
     if (settings.verbose) {

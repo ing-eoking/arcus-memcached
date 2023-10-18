@@ -518,6 +518,94 @@ if test "x$enable_zk_integration" = "xyes"; then
   fi
 fi
 
+dnl ------------------------------------------------------
+dnl Enable Luascript.
+
+AC_ARG_ENABLE(luascript,
+  [AS_HELP_STRING([--enable-luascript],[Enable Luascript integration])])
+
+if test "x$enable_luascript" = "xyes"; then
+  AC_DEFINE([ENABLE_LUASCRIPT],[1],[Set to nonzero if you want to use luascript])
+
+  tryluascriptdir=""
+  AC_ARG_WITH(luascript,
+      [ --with-luascript=PATH specify path to luascript installation ],
+      [
+        if test "x$withval" != "xno" ; then
+          tryluascriptdir=$withval
+        fi
+      ]
+  )
+
+  AC_CACHE_CHECK([for luascript directory], ac_cv_luascript_dir, [
+    saved_LIBS="$LIBS"
+    saved_LDFLAGS="$LDFLAGS"
+    saved_CPPFLAGS="$CPPFLAGS"
+    lua_found=no
+    for luadir in $tryluascriptdir "" $prefix /usr/local ; do
+      LDFLAGS="$saved_LDFLAGS"
+      LIBS="$saved_LIBS -llua"
+
+      # Skip the directory if it isn't there.
+      if test ! -z "$luadir" -a ! -d "$luadir" ; then
+         continue;
+      fi
+      if test ! -z "$luadir" ; then
+        if test -d "$luadir/lib" ; then
+          LDFLAGS="-L$luadir/lib $LDFLAGS"
+        else
+          LDFLAGS="-L$luadir $LDFLAGS"
+        fi
+        if test -d "$luadir/include/" ; then
+          CPPFLAGS="-I$luadir/include/ $CPPFLAGS"
+        else
+          CPPFLAGS="-I$luadir $CPPFLAGS"
+        fi
+      fi
+      if test ! -z "$luadir" ; then
+        ac_cv_luascript_dir=$luadir
+      else
+        ac_cv_luascript_dir="(system)"
+      fi
+
+      AC_TRY_LINK([
+        #include <lua.h>
+        #include <lualib.h>
+        #include <lauxlib.h>
+      ], [ lua_State* L = luaL_newstate(); ],
+      [ lua_found=yes ],[ lua_found=no ])
+      if test $lua_found = yes ; then
+        break
+      fi
+    done
+    LIBS="$saved_LIBS"
+    LDFLAGS="$saved_LDFLAGS"
+    CPPFLAGS="$saved_CPPFLAGS"
+    if test $lua_found = no ; then
+      AC_MSG_ERROR([
+        If luascript is already installed, that's too bad
+  ])
+    fi
+  ])
+
+  if test $ac_cv_luascript_dir != "(system)"; then
+    if test -d "$ac_cv_luascript_dir/lib" ; then
+      LDFLAGS="-L$ac_cv_luascript_dir/lib $LDFLAGS"
+      lua_libdir="$ac_cv_luascript_dir/lib"
+    else
+      LDFLAGS="-L$ac_cv_luascript_dir $LDFLAGS"
+      lua_libdir="$ac_cv_luascript_dir"
+    fi
+    if test -d "$ac_cv_luascript_dir/include" ; then
+      CPPFLAGS="-I$ac_cv_luascript_dir/include $CPPFLAGS"
+    else
+      CPPFLAGS="-I$ac_cv_luascript_dir $CPPFLAGS"
+    fi
+  fi
+fi
+dnl ----------------------------------------------------------------------------
+
+
 dnl ----------------------------------------------------------------------------
 
 dnl **********************************************************************

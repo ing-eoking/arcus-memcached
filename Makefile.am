@@ -94,7 +94,7 @@ memcached_SOURCES = \
 memcached_LDFLAGS =-R '$(libdir)'
 memcached_CFLAGS = @PROFILER_FLAGS@ ${AM_CFLAGS}
 memcached_DEPENDENCIES = libmcd_util.la
-memcached_LDADD = @PROFILER_LDFLAGS@ libmcd_util.la -levent $(APPLICATION_LIBS)
+memcached_LDADD = @PROFILER_LDFLAGS@ libmcd_util.la -levent -llua $(APPLICATION_LIBS)
 
 if BUILD_CACHE
 memcached_SOURCES += cache.c
