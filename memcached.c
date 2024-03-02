@@ -1041,83 +1041,6 @@ static void conn_shrink(conn *c)
     }
 }
 
-static void ritem_set_first(conn *c, int rtype, int vleng)
-{
-    c->rtype = rtype;
-
-    if (c->rtype == CONN_RTYPE_MBLCK) {
-        c->membk = MBLCK_GET_HEADBLK(&c->memblist);
-        c->ritem = MBLCK_GET_BODYPTR(c->membk);
-        c->rlbytes = vleng < MBLCK_GET_BODYLEN(&c->memblist)
-                   ? vleng : MBLCK_GET_BODYLEN(&c->memblist);
-        c->rltotal = vleng;
-    }
-    else if (c->rtype == CONN_RTYPE_HINFO) {
-        if (c->hinfo.naddnl == 0) {
-            c->ritem = (char*)c->hinfo.value;
-            c->rlbytes = vleng;
-            c->rltotal = 0;
-        } else {
-            if (c->hinfo.nvalue > 0) {
-                c->ritem = (char*)c->hinfo.value;
-                c->rlbytes = vleng < c->hinfo.nvalue
-                           ? vleng : c->hinfo.nvalue;
-                c->rindex = 0;
-            } else {
-                c->ritem = c->hinfo.addnl[0]->ptr;
-                c->rlbytes = vleng < c->hinfo.addnl[0]->len
-                           ? vleng : c->hinfo.addnl[0]->len;
-                c->rindex = 1;
-            }
-            c->rltotal = vleng;
-        }
-    }
-    else if (c->rtype == CONN_RTYPE_EINFO) {
-        if (c->einfo.naddnl == 0) {
-            c->ritem = (char*)c->einfo.value;
-            c->rlbytes = vleng;
-            c->rltotal = 0;
-        } else {
-            if (c->einfo.nvalue > 0) {
-                c->ritem = (char*)c->einfo.value;
-                c->rlbytes = vleng < c->einfo.nvalue
-                           ? vleng : c->einfo.nvalue;
-                c->rindex = 0;
-            } else {
-                c->ritem = c->einfo.addnl[0]->ptr;
-                c->rlbytes = vleng < c->einfo.addnl[0]->len
-                           ? vleng : c->einfo.addnl[0]->len;
-                c->rindex = 1;
-            }
-            c->rltotal = vleng;
-        }
-    }
-}
-
-static void ritem_set_next(conn *c)
-{
-    assert(c->rltotal > 0);
-
-    if (c->rtype == CONN_RTYPE_MBLCK) {
-        c->membk = MBLCK_GET_NEXTBLK(c->membk);
-        c->ritem = MBLCK_GET_BODYPTR(c->membk);
-        c->rlbytes = c->rltotal < MBLCK_GET_BODYLEN(&c->memblist)
-                   ? c->rltotal : MBLCK_GET_BODYLEN(&c->memblist);
-    }
-    else if (c->rtype == CONN_RTYPE_HINFO) {
-        c->ritem = c->hinfo.addnl[c->rindex]->ptr;
-        c->rlbytes = c->rltotal < c->hinfo.addnl[c->rindex]->len
-                   ? c->rltotal : c->hinfo.addnl[c->rindex]->len;
-        c->rindex += 1;
-    }
-    else if (c->rtype == CONN_RTYPE_EINFO) {
-        c->ritem = c->einfo.addnl[c->rindex]->ptr;
-        c->rlbytes = c->rltotal < c->einfo.addnl[c->rindex]->len
-                   ? c->rltotal : c->einfo.addnl[c->rindex]->len;
-        c->rindex += 1;
-    }
-}
-
 /**
  * Convert a state name to a human readable form.
  */
@@ -1288,8 +1211,8 @@ static int add_iov_hinfo_value(conn *c, item_info *hinfo)
     } else {
         assert(c->protocol == binary_prot);
         /* exclude the "\r\n" string at the end of the value */
-        int length = hinfo->nbytes - 2;
-        int iosize;
+        uint32_t length = hinfo->nbytes - 2;
+        uint32_t iosize;
         if (hinfo->nvalue > 0 && length > 0) {
             iosize = length < hinfo->nvalue
                    ? length : hinfo->nvalue;
@@ -1338,6 +1261,21 @@ static int add_iov_einfo_value(conn *c, eitem_info *einfo)
                 return -1;
             length -= iosize;
         }
+    }
+    return 0;
+}
+
+static int add_iov_mblck_value(conn *c, mblck_list_t *memblist)
+{
+    int len = MBLCK_GET_ITEMCNT(memblist);
+    for (mblck_node_t *membk  = MBLCK_GET_HEADBLK(memblist);
+                       membk != NULL && len > 0;
+                       membk  = MBLCK_GET_NEXTBLK(membk)) {
+        int tocopy = len < MBLCK_GET_BODYLEN(memblist)
+                   ? len : MBLCK_GET_BODYLEN(memblist);
+        if (add_iov(c, MBLCK_GET_BODYPTR(membk), tocopy) != 0)
+            return -1;
+        len -= tocopy;
     }
     return 0;
 }
@@ -3883,6 +3821,7 @@ static void process_bin_get(conn *c)
 
         /* Add the data minus the CRLF */
         add_iov_hinfo_value(c, &c->hinfo);
+        //ritem_set_First
         conn_set_state(c, conn_mwrite);
         /* Remember this command so we can garbage collect it later */
         c->item = it;
@@ -4145,9 +4084,10 @@ static void bin_read_chunk(conn *c, enum bin_substates next_substate, uint32_t c
     }
 
     /* preserve the header in the buffer.. */
-    c->ritem = c->rcurr + sizeof(protocol_binary_request_header);
-    c->rlbytes = chunk;
-    c->rltotal = 0;
+    add_iov(c, c->rcurr + sizeof(protocol_binary_request_header), chunk);
+    //c->ritem = c->rcurr + sizeof(protocol_binary_request_header);
+    //c->rlbytes = chunk;
+    //c->rltotal = 0;
     conn_set_state(c, conn_nread);
 }
 
@@ -4262,9 +4202,10 @@ static void process_bin_sasl_auth(conn *c)
     memcpy(data->data, key, nkey);
 
     c->item = data;
-    c->ritem = data->data + nkey;
-    c->rlbytes = vlen;
-    c->rltotal = 0;
+    add_iov(c, data->data + nkey, vlen);
+    //c->ritem = data->data + nkey;
+    //c->rlbytes = vlen;
+    //c->rltotal = 0;
     conn_set_state(c, conn_nread);
     c->substate = bin_reading_sasl_auth_data;
 }
@@ -4496,7 +4437,8 @@ static void process_bin_lop_prepare_nread(conn *c)
     }
     if (ret == ENGINE_SUCCESS) {
         mc_engine.v1->get_elem_info(mc_engine.v0, c, ITEM_TYPE_LIST, elem, &c->einfo);
-        ritem_set_first(c, CONN_RTYPE_EINFO, vlen);
+        add_iov_einfo_value(c, &c->einfo);
+        //ritem_set_first(c, CONN_RTYPE_EINFO, vlen);
         c->coll_eitem  = (void *)elem;
         c->coll_ecount = 1;
         c->coll_op     = OPERATION_LOP_INSERT;
@@ -4884,11 +4826,13 @@ static void process_bin_sop_prepare_nread(conn *c)
     if (ret == ENGINE_SUCCESS) {
         if (c->cmd == PROTOCOL_BINARY_CMD_SOP_INSERT) {
             mc_engine.v1->get_elem_info(mc_engine.v0, c, ITEM_TYPE_SET, elem, &c->einfo);
-            ritem_set_first(c, CONN_RTYPE_EINFO, vlen);
+            add_iov_einfo_value(c, &c->einfo);
+            //ritem_set_first(c, CONN_RTYPE_EINFO, vlen);
          } else {
-            c->ritem   = ((value_item *)elem)->ptr;
-            c->rlbytes = vlen;
-            c->rltotal = 0;
+            add_iov(c, ((value_item *) elem)->ptr, vlen);
+            //c->ritem   = ((value_item *)elem)->ptr;
+            //c->rlbytes = vlen;
+            //c->rltotal = 0;
          }
         c->coll_eitem  = (void *)elem;
         c->coll_ecount = 1;
@@ -5363,7 +5307,8 @@ static void process_bin_bop_prepare_nread(conn *c)
             memcpy((void*)c->einfo.eflag, req->message.body.eflag, c->einfo.neflag);
         }
 
-        ritem_set_first(c, CONN_RTYPE_EINFO, vlen);
+        add_iov_einfo_value(c, &c->einfo);
+        //ritem_set_first(c, CONN_RTYPE_EINFO, vlen);
         c->coll_eitem  = (void *)elem;
         c->coll_ecount = 1;
         c->coll_op     = (c->cmd == PROTOCOL_BINARY_CMD_BOP_INSERT ? OPERATION_BOP_INSERT
@@ -5592,9 +5537,10 @@ static void process_bin_bop_update_prepare_nread(conn *c)
             ((value_item*)elem)->len = vlen + 2;
     }
     if (ret == ENGINE_SUCCESS) {
-        c->ritem       = ((value_item *)elem)->ptr;
-        c->rlbytes     = vlen;
-        c->rltotal     = 0;
+        add_iov(c, ((value_item *)elem)->ptr, vlen);
+        //c->ritem       = ((value_item *)elem)->ptr;
+        //c->rlbytes     = vlen;
+        //c->rltotal     = 0;
         c->coll_eitem  = (void *)elem;
         c->coll_ecount = 1;
         c->coll_op     = OPERATION_BOP_UPDATE;
@@ -6064,7 +6010,8 @@ static void process_bin_bop_prepare_nread_keys(conn *c)
 
     if (ret == ENGINE_SUCCESS) {
         c->coll_strkeys = (void*)&c->memblist;
-        ritem_set_first(c, CONN_RTYPE_MBLCK, vlen);
+        add_iov_mblck_value(c, &c->memblist);
+        //ritem_set_first(c, CONN_RTYPE_MBLCK, vlen);
         c->coll_eitem  = (void *)elem;
         c->coll_ecount = 0;
         c->coll_op = (c->cmd==PROTOCOL_BINARY_CMD_BOP_MGET ? OPERATION_BOP_MGET : OPERATION_BOP_SMGET);
@@ -7154,7 +7101,8 @@ static void process_bin_update(conn *c)
         }
 
         c->item = it;
-        ritem_set_first(c, CONN_RTYPE_HINFO, vlen);
+        add_iov_hinfo_value(c, &c->hinfo);
+        //ritem_set_first(c, CONN_RTYPE_HINFO, vlen);
         conn_set_state(c, conn_nread);
         c->substate = bin_read_set_value;
         break;
@@ -7230,7 +7178,8 @@ static void process_bin_append_prepend(conn *c)
             assert(0);
 
         c->item = it;
-        ritem_set_first(c, CONN_RTYPE_HINFO, vlen);
+        add_iov_hinfo_value(c, &c->hinfo);
+        //ritem_set_first(c, CONN_RTYPE_HINFO, vlen);
         conn_set_state(c, conn_nread);
         c->substate = bin_read_set_value;
         break;
@@ -8411,7 +8360,8 @@ static void process_prepare_nread_keys(conn *c, uint32_t vlen, uint32_t kcnt, bo
     }
     if (ret == ENGINE_SUCCESS) {
         c->coll_strkeys = (void*)&c->memblist;
-        ritem_set_first(c, CONN_RTYPE_MBLCK, vlen);
+        add_iov_mblck_value(c, &c->memblist);
+        //ritem_set_first(c, CONN_RTYPE_MBLCK, vlen);
         c->coll_op = (return_cas ? OPERATION_MGETS : OPERATION_MGET);
         conn_set_state(c, conn_nread);
     } else {
@@ -8505,7 +8455,8 @@ static void process_update_command(conn *c, token_t *tokens, const size_t ntoken
             ret = ENGINE_FAILED; /* FIXME: error type */
         } else {
             c->item = it;
-            ritem_set_first(c, CONN_RTYPE_HINFO, vlen);
+            add_iov_hinfo_value(c, &c->hinfo);
+            //ritem_set_first(c, CONN_RTYPE_HINFO, vlen);
             c->store_op = store_op;
             conn_set_state(c, conn_nread);
         }
@@ -9559,9 +9510,10 @@ static void process_extension_command(conn *c, token_t *tokens, size_t ntokens)
             }
         }
     } else {
-        c->ritem = ptr;
-        c->rlbytes = nbytes;
-        c->rltotal = 0;
+        add_iov(c, ptr, nbytes);
+        //c->ritem = ptr;
+        //c->rlbytes = nbytes;
+        //c->rltotal = 0;
         c->ascii_cmd = cmd;
         /* NOT SUPPORTED YET! */
         conn_set_state(c, conn_nread);
@@ -10275,7 +10227,8 @@ static void process_lop_prepare_nread(conn *c, int cmd, size_t vlen,
     }
     if (ret == ENGINE_SUCCESS) {
         mc_engine.v1->get_elem_info(mc_engine.v0, c, ITEM_TYPE_LIST, elem, &c->einfo);
-        ritem_set_first(c, CONN_RTYPE_EINFO, vlen);
+        add_iov_einfo_value(c, &c->einfo);
+        //ritem_set_first(c, CONN_RTYPE_EINFO, vlen);
         c->coll_eitem  = (void *)elem;
         c->coll_ecount = 1;
         c->coll_op     = OPERATION_LOP_INSERT;
@@ -10672,11 +10625,13 @@ static void process_sop_prepare_nread(conn *c, int cmd, size_t vlen, char *key, 
     if (ret == ENGINE_SUCCESS) {
         if (cmd == (int)OPERATION_SOP_INSERT) {
             mc_engine.v1->get_elem_info(mc_engine.v0, c, ITEM_TYPE_SET, elem, &c->einfo);
-            ritem_set_first(c, CONN_RTYPE_EINFO, vlen);
+            add_iov_einfo_value(c, &c->einfo);
+            //ritem_set_first(c, CONN_RTYPE_EINFO, vlen);
         } else {
-            c->ritem = ((value_item *)elem)->ptr;
-            c->rlbytes = vlen;
-            c->rltotal = 0;
+            add_iov(c, ((value_item *)elem)->ptr, vlen);
+            //c->ritem = ((value_item *)elem)->ptr;
+            //c->rlbytes = vlen;
+            //c->rltotal = 0;
         }
         c->coll_eitem  = (void *)elem;
         c->coll_ecount = 1;
@@ -11348,9 +11303,10 @@ static void process_bop_update_prepare_nread(conn *c, int cmd,
             ((value_item*)elem)->len = vlen;
     }
     if (ret == ENGINE_SUCCESS) {
-        c->ritem   = ((value_item *)elem)->ptr;
-        c->rlbytes = vlen;
-        c->rltotal = 0;
+        add_iov(c, ((value_item *)elem)->ptr, vlen);
+        //c->ritem   = ((value_item *)elem)->ptr;
+        //c->rlbytes = vlen;
+        //c->rltotal = 0;
         c->coll_eitem  = (void *)elem;
         c->coll_ecount = 1;
         c->coll_op     = cmd;
@@ -11392,7 +11348,8 @@ static void process_bop_prepare_nread(conn *c, int cmd, char *key, size_t nkey,
         memcpy((void*)c->einfo.score, bkey, (c->einfo.nscore==0 ? sizeof(uint64_t) : c->einfo.nscore));
         if (c->einfo.neflag > 0)
             memcpy((void*)c->einfo.eflag, eflag, c->einfo.neflag);
-        ritem_set_first(c, CONN_RTYPE_EINFO, vlen);
+        add_iov_einfo_value(c, &c->einfo);
+        //ritem_set_first(c, CONN_RTYPE_EINFO, vlen);
         c->coll_eitem  = (void *)elem;
         c->coll_ecount = 1;
         c->coll_op     = cmd; /* OPERATION_BOP_INSERT | OPERATION_BOP_UPSERT */
@@ -11484,7 +11441,8 @@ static void process_bop_prepare_nread_keys(conn *c, int cmd, uint32_t vlen, uint
     }
     if (ret == ENGINE_SUCCESS) {
         c->coll_strkeys = (void*)&c->memblist;
-        ritem_set_first(c, CONN_RTYPE_MBLCK, vlen);
+        add_iov_mblck_value(c, &c->memblist);
+        //ritem_set_first(c, CONN_RTYPE_MBLCK, vlen);
         c->coll_eitem  = (void *)elem;
         c->coll_ecount = 0;
         c->coll_op = cmd;
@@ -11848,11 +11806,13 @@ static void process_mop_prepare_nread(conn *c, int cmd, char *key, size_t nkey, 
     if (ret == ENGINE_SUCCESS) {
         if (cmd == OPERATION_MOP_INSERT) {
             mc_engine.v1->get_elem_info(mc_engine.v0, c, ITEM_TYPE_MAP, elem, &c->einfo);
-            ritem_set_first(c, CONN_RTYPE_EINFO, vlen);
+            add_iov_einfo_value(c, &c->einfo);
+            //ritem_set_first(c, CONN_RTYPE_EINFO, vlen);
         } else {
-            c->ritem   = ((value_item *)elem)->ptr;
-            c->rlbytes = vlen;
-            c->rltotal = 0;
+            add_iov(c, ((value_item *)elem)->ptr, vlen);
+            //c->ritem   = ((value_item *)elem)->ptr;
+            //c->rlbytes = vlen;
+            //c->rltotal = 0;
         }
         c->coll_eitem  = (void *)elem;
         c->coll_ecount = 1;
@@ -11894,7 +11854,8 @@ static void process_mop_prepare_nread_fields(conn *c, int cmd, char *key, size_t
     }
     if (ret == ENGINE_SUCCESS) {
         c->coll_strkeys = (void*)&c->memblist;
-        ritem_set_first(c, CONN_RTYPE_MBLCK, flen);
+        add_iov_mblck_value(c, &c->memblist);
+        //ritem_set_first(c, CONN_RTYPE_MBLCK, flen);
         c->coll_ecount = 1;
         c->coll_op = cmd;
         c->coll_lenkeys = flen;
@@ -13781,8 +13742,16 @@ bool conn_swallow(conn *c)
 bool conn_nread(conn *c)
 {
     ssize_t res;
+    if (c->msgcurr < c->msgused && c->msglist[c->msgcurr].msg_iovlen == 0) {
+        c->msgcurr++;
+    }
 
-    if (c->rlbytes == 0) {
+    if (c->msgcurr >= c->msgused) {
+        c->msgcurr = 0;
+        c->msgused = 0;
+        c->iovused = 0;
+        add_msghdr(c);
+
         complete_nread(c);
 
         /* complete_nread eventually calls write functions
@@ -13800,42 +13769,61 @@ bool conn_nread(conn *c)
         return true;
     }
 
+    struct msghdr *m = &c->msglist[c->msgcurr];
+    int tocopy = 0;
+
+    if (IS_UDP(c->transport) && m->msg_iov->iov_base == NULL) {
+        m->msg_iov++;
+        m->msg_iovlen--;
+    }
     /* first check if we have leftovers in the conn_read buffer */
-    while (c->rbytes > 0) {
-        int tocopy = c->rbytes > c->rlbytes ? c->rlbytes : c->rbytes;
-        if (c->ritem != c->rcurr) {
-            memmove(c->ritem, c->rcurr, tocopy);
+    while (c->rbytes > 0 || c->rbytes >= m->msg_iov->iov_len) {
+        tocopy = c->rbytes < m->msg_iov->iov_len
+               ? c->rbytes : m->msg_iov->iov_len;
+        if (m->msg_iov->iov_base != c->rcurr) {
+            memmove(m->msg_iov->iov_base, c->rcurr, tocopy);
         }
-        c->ritem += tocopy;
-        c->rlbytes -= tocopy;
-        c->rcurr += tocopy;
+        c->rcurr  += tocopy;
         c->rbytes -= tocopy;
-        if (c->rltotal > 0) { /* string block read */
-            c->rltotal -= tocopy;
-            if (c->rlbytes == 0 && c->rltotal > 0) {
-                ritem_set_next(c);
-                continue;
+        if (c->rbytes < m->msg_iov->iov_len) {
+            m->msg_iov->iov_base = (caddr_t)m->msg_iov->iov_base + tocopy;
+            m->msg_iov->iov_len -= tocopy;
+        }
+        else {
+            m->msg_iov++;
+            m->msg_iovlen--;
+        }
+        if (m->msg_iovlen == 0) {
+            m = &c->msglist[++c->msgcurr];
+            if (IS_UDP(c->transport)) {
+                m->msg_iov++;
+                m->msg_iovlen--;
             }
         }
-        if (c->rlbytes == 0) {
+        if (c->msgcurr >= c->msgused) {
             return true;
         }
     }
 
     /*  now try reading from the socket */
-    res = read(c->sfd, c->ritem, c->rlbytes);
+    res = recvmsg(c->sfd, m, 0);
     if (res > 0) {
         STATS_ADD(c, bytes_read, res);
-        if (c->rcurr == c->ritem) {
-            c->rcurr += res;
-        }
-        c->ritem += res;
-        c->rlbytes -= res;
-        if (c->rltotal > 0) {
-            c->rltotal -= res;
-            if (c->rlbytes == 0 && c->rltotal > 0) {
-                ritem_set_next(c);
+        while (res > 0) {
+            tocopy = res < m->msg_iov->iov_len
+                   ? res : m->msg_iov->iov_len;
+            if (m->msg_iov->iov_base == c->rcurr) {
+                c->rcurr += tocopy;
             }
+            if (res < m->msg_iov->iov_len) {
+                m->msg_iov->iov_base = (caddr_t)m->msg_iov->iov_base + tocopy;
+                m->msg_iov->iov_len -= tocopy;
+            }
+            else {
+                m->msg_iov++;
+                m->msg_iovlen--;
+            }
+            res -= tocopy;
         }
         return true;
     }
