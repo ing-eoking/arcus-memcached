@@ -29,7 +29,6 @@
 #include <memcached/engine.h>
 #include <memcached/extension.h>
 #include "cache.h"
-#include "topkeys.h"
 #include "mc_util.h"
 #include "cmdlog.h"
 #include "lqdetect.h"
@@ -116,25 +115,7 @@
 #define PIPE_STATE_ERR_MFULL 3
 #define PIPE_STATE_ERR_BAD   4
 
-#define STAT_KEY_LEN 128
-#define STAT_VAL_LEN 128
-
 #define DEFAULT_REQS_PER_EVENT     20
-
-/** Append a simple stat with a stat name, value format and value */
-#define APPEND_STAT(name, fmt, val) \
-    append_stat(name, add_stats, c, fmt, val);
-
-/** Append an indexed stat with a stat name (with format), value format
-    and value */
-#define APPEND_NUM_FMT_STAT(name_fmt, num, name, fmt, val)          \
-    klen = snprintf(key_str, STAT_KEY_LEN, name_fmt, num, name);    \
-    vlen = snprintf(val_str, STAT_VAL_LEN, fmt, val);               \
-    add_stats(key_str, klen, val_str, vlen, c);
-
-/** Common APPEND_NUM_FMT_STAT format. */
-#define APPEND_NUM_STAT(num, name, fmt, val) \
-    APPEND_NUM_FMT_STAT("%d:%s", num, name, fmt, val)
 
 enum bin_substates {
     bin_no_state,
@@ -250,8 +231,15 @@ struct settings {
     } extensions;
 };
 
+union mc_engine {
+    ENGINE_HANDLE *v0;
+    ENGINE_HANDLE_V1 *v1;
+};
+
 extern struct settings settings;
 extern EXTENSION_LOGGER_DESCRIPTOR *mc_logger;
+extern struct mc_stats mc_stats;
+extern union mc_engine mc_engine;
 
 typedef struct conn conn;
 typedef bool (*STATE_FUNC)(conn *);
@@ -495,77 +483,6 @@ struct conn {
 }
 
 /*
- * Macros for incrementing thread_stats
- */
-/* The external variables used in below macros */
-extern struct thread_stats *default_thread_stats;
-extern topkeys_t *default_topkeys;
-
-#define MY_THREAD_STATS(c) (&default_thread_stats[(c)->thread->index])
-
-#define STATS_CMD(c, op, key, nkey) { \
-    struct thread_stats *my_thread_stats = MY_THREAD_STATS(c); \
-    THREAD_STATS_INCR_ONE(my_thread_stats, cmd_##op); \
-    TK(default_topkeys, cmd_##op, key, nkey, get_current_time()); \
-}
-
-#define STATS_OKS(c, op, key, nkey) { \
-    struct thread_stats *my_thread_stats = MY_THREAD_STATS(c); \
-    THREAD_STATS_INCR_TWO(my_thread_stats, op##_oks, cmd_##op); \
-    TK(default_topkeys, op##_oks, key, nkey, get_current_time()); \
-}
-
-#define STATS_HITS(c, op, key, nkey) { \
-    struct thread_stats *my_thread_stats = MY_THREAD_STATS(c); \
-    THREAD_STATS_INCR_TWO(my_thread_stats, op##_hits, cmd_##op); \
-    TK(default_topkeys, op##_hits, key, nkey, get_current_time()); \
-}
-
-#define STATS_ELEM_HITS(c, op, key, nkey) { \
-    struct thread_stats *my_thread_stats = MY_THREAD_STATS(c); \
-    THREAD_STATS_INCR_TWO(my_thread_stats, op##_elem_hits, cmd_##op); \
-    TK(default_topkeys, op##_elem_hits, key, nkey, get_current_time()); \
-}
-
-#define STATS_NONE_HITS(c, op, key, nkey) { \
-    struct thread_stats *my_thread_stats = MY_THREAD_STATS(c); \
-    THREAD_STATS_INCR_TWO(my_thread_stats, op##_none_hits, cmd_##op); \
-    TK(default_topkeys, op##_none_hits, key, nkey, get_current_time()); \
-}
-
-#define STATS_MISSES(c, op, key, nkey) { \
-    struct thread_stats *my_thread_stats = MY_THREAD_STATS(c); \
-    THREAD_STATS_INCR_TWO(my_thread_stats, op##_misses, cmd_##op); \
-    TK(default_topkeys, op##_misses, key, nkey, get_current_time()); \
-}
-
-#define STATS_BADVAL(c, op, key, nkey) { \
-    struct thread_stats *my_thread_stats = MY_THREAD_STATS(c); \
-    THREAD_STATS_INCR_TWO(my_thread_stats, op##_badval, cmd_##op); \
-    TK(default_topkeys, op##_badval, key, nkey, get_current_time()); \
-}
-
-#define STATS_CMD_NOKEY(c, op) { \
-    struct thread_stats *my_thread_stats = MY_THREAD_STATS(c); \
-    THREAD_STATS_INCR_ONE(my_thread_stats, cmd_##op); \
-}
-
-#define STATS_OKS_NOKEY(c, op) { \
-    struct thread_stats *my_thread_stats = MY_THREAD_STATS(c); \
-    THREAD_STATS_INCR_TWO(my_thread_stats, op##_oks, cmd_##op); \
-}
-
-#define STATS_ERRORS_NOKEY(c, op) { \
-    struct thread_stats *my_thread_stats = MY_THREAD_STATS(c); \
-    THREAD_STATS_INCR_TWO(my_thread_stats, op##_errors, cmd_##op); \
-}
-
-#define STATS_ADD(c, op, amt) { \
-    struct thread_stats *my_thread_stats = MY_THREAD_STATS(c); \
-    THREAD_STATS_INCR_AMT(my_thread_stats, op, amt); \
-}
-
-/*
  * Functions
  */
 conn *conn_new(const int sfd, STATE_FUNC init_state, const int event_flags,
@@ -576,24 +493,30 @@ extern int daemonize(int nochdir, int noclose);
 #endif
 
 #include "stats.h"
+#include "stats_prefix.h"
+#include "topkeys.h"
 #include "trace.h"
 #include "hash.h"
 #include <memcached/util.h>
 
-void LOCK_STATS(void);
-void UNLOCK_STATS(void);
+extern struct thread_stats *default_thread_stats;
+extern topkeys_t *default_topkeys;
 
 void LOCK_SETTING(void);
 void UNLOCK_SETTING(void);
+
+/* Time */
+rel_time_t get_current_time(void);
+rel_time_t get_started_time(void);
+rel_time_t realtime(const time_t exptime);
+rel_time_t human_readable_time(const rel_time_t exptime);
+
+const char *prot_text(enum protocol prot);
 
 /* Lock wrappers for cache functions that are called from main loop. */
 void accept_new_conns(const bool do_accept);
 conn *conn_from_freelist(void);
 bool  conn_add_to_freelist(conn *c);
-
-/* Stat processing functions */
-void append_stat(const char *name, ADD_STAT add_stats, conn *c,
-                 const char *fmt, ...);
 
 void conn_set_state(conn *c, STATE_FUNC state);
 const char *state_text(STATE_FUNC state);

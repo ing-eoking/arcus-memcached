@@ -1,58 +1,102 @@
+#define STAT_KEY_LEN 128
+#define STAT_VAL_LEN 128
+
+/** Append a simple stat with a stat name, value format and value */
+#define APPEND_STAT(name, fmt, val) \
+    append_stat(name, add_stats, c, fmt, val);
+
+/** Append an indexed stat with a stat name (with format), value format
+    and value */
+#define APPEND_NUM_FMT_STAT(name_fmt, num, name, fmt, val)          \
+    klen = snprintf(key_str, STAT_KEY_LEN, name_fmt, num, name);    \
+    vlen = snprintf(val_str, STAT_VAL_LEN, fmt, val);               \
+    add_stats(key_str, klen, val_str, vlen, c);
+
+/** Common APPEND_NUM_FMT_STAT format. */
+#define APPEND_NUM_STAT(num, name, fmt, val) \
+    APPEND_NUM_FMT_STAT("%d:%s", num, name, fmt, val)
+
 /*
- * arcus-memcached - Arcus memory cache server
- * Copyright 2010-2014 NAVER Corp.
- * Copyright 2015 JaM2in Co., Ltd.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- * http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Macros for incrementing thread_stats
  */
+#define MY_THREAD_STATS(c) (&default_thread_stats[(c)->thread->index])
+
+#define STATS_CMD(c, op, key, nkey) { \
+    struct thread_stats *my_thread_stats = MY_THREAD_STATS(c); \
+    THREAD_STATS_INCR_ONE(my_thread_stats, cmd_##op); \
+    TK(default_topkeys, cmd_##op, key, nkey, get_current_time()); \
+}
+
+#define STATS_OKS(c, op, key, nkey) { \
+    struct thread_stats *my_thread_stats = MY_THREAD_STATS(c); \
+    THREAD_STATS_INCR_TWO(my_thread_stats, op##_oks, cmd_##op); \
+    TK(default_topkeys, op##_oks, key, nkey, get_current_time()); \
+}
+
+#define STATS_HITS(c, op, key, nkey) { \
+    struct thread_stats *my_thread_stats = MY_THREAD_STATS(c); \
+    THREAD_STATS_INCR_TWO(my_thread_stats, op##_hits, cmd_##op); \
+    TK(default_topkeys, op##_hits, key, nkey, get_current_time()); \
+}
+
+#define STATS_ELEM_HITS(c, op, key, nkey) { \
+    struct thread_stats *my_thread_stats = MY_THREAD_STATS(c); \
+    THREAD_STATS_INCR_TWO(my_thread_stats, op##_elem_hits, cmd_##op); \
+    TK(default_topkeys, op##_elem_hits, key, nkey, get_current_time()); \
+}
+
+#define STATS_NONE_HITS(c, op, key, nkey) { \
+    struct thread_stats *my_thread_stats = MY_THREAD_STATS(c); \
+    THREAD_STATS_INCR_TWO(my_thread_stats, op##_none_hits, cmd_##op); \
+    TK(default_topkeys, op##_none_hits, key, nkey, get_current_time()); \
+}
+
+#define STATS_MISSES(c, op, key, nkey) { \
+    struct thread_stats *my_thread_stats = MY_THREAD_STATS(c); \
+    THREAD_STATS_INCR_TWO(my_thread_stats, op##_misses, cmd_##op); \
+    TK(default_topkeys, op##_misses, key, nkey, get_current_time()); \
+}
+
+#define STATS_BADVAL(c, op, key, nkey) { \
+    struct thread_stats *my_thread_stats = MY_THREAD_STATS(c); \
+    THREAD_STATS_INCR_TWO(my_thread_stats, op##_badval, cmd_##op); \
+    TK(default_topkeys, op##_badval, key, nkey, get_current_time()); \
+}
+
+#define STATS_CMD_NOKEY(c, op) { \
+    struct thread_stats *my_thread_stats = MY_THREAD_STATS(c); \
+    THREAD_STATS_INCR_ONE(my_thread_stats, cmd_##op); \
+}
+
+#define STATS_OKS_NOKEY(c, op) { \
+    struct thread_stats *my_thread_stats = MY_THREAD_STATS(c); \
+    THREAD_STATS_INCR_TWO(my_thread_stats, op##_oks, cmd_##op); \
+}
+
+#define STATS_ERRORS_NOKEY(c, op) { \
+    struct thread_stats *my_thread_stats = MY_THREAD_STATS(c); \
+    THREAD_STATS_INCR_TWO(my_thread_stats, op##_errors, cmd_##op); \
+}
+
+#define STATS_ADD(c, op, amt) { \
+    struct thread_stats *my_thread_stats = MY_THREAD_STATS(c); \
+    THREAD_STATS_INCR_AMT(my_thread_stats, op, amt); \
+}
+
+void LOCK_STATS(void);
+void UNLOCK_STATS(void);
+
+void append_stat(const char *name, ADD_STAT add_stats, conn *c,
+                 const char *fmt, ...);
+
 /* stats */
-void stats_prefix_init(char delimiter, void (*cb_when_prefix_overflow)(void));
-void stats_prefix_clear(void);
-int  stats_prefix_count(void);
-int  stats_prefix_insert(const char *prefix, const size_t nprefix);
-int  stats_prefix_delete(const char *prefix, const size_t nprefix);
-void stats_prefix_record_get(const char *key, const size_t nkey, const bool is_hit);
-void stats_prefix_record_delete(const char *key, const size_t nkey);
-void stats_prefix_record_set(const char *key, const size_t nkey);
-void stats_prefix_record_incr(const char *key, const size_t nkey);
-void stats_prefix_record_decr(const char *key, const size_t nkey);
-void stats_prefix_record_lop_create(const char *key, const size_t nkey);
-void stats_prefix_record_lop_insert(const char *key, const size_t nkey, const bool is_hit);
-void stats_prefix_record_lop_delete(const char *key, const size_t nkey, const bool is_hit);
-void stats_prefix_record_lop_get(const char *key, const size_t nkey, const bool is_hit);
-void stats_prefix_record_sop_create(const char *key, const size_t nkey);
-void stats_prefix_record_sop_insert(const char *key, const size_t nkey, const bool is_hit);
-void stats_prefix_record_sop_delete(const char *key, const size_t nkey, const bool is_hit);
-void stats_prefix_record_sop_get(const char *key, const size_t nkey, const bool is_hit);
-void stats_prefix_record_sop_exist(const char *key, const size_t nkey, const bool is_hit);
-void stats_prefix_record_mop_create(const char *key, const size_t nkey);
-void stats_prefix_record_mop_insert(const char *key, const size_t nkey, const bool is_hit);
-void stats_prefix_record_mop_update(const char *key, const size_t nkey, const bool is_hit);
-void stats_prefix_record_mop_delete(const char *key, const size_t nkey, const bool is_hit);
-void stats_prefix_record_mop_get(const char *key, const size_t nkey, const bool is_hit);
-void stats_prefix_record_bop_create(const char *key, const size_t nkey);
-void stats_prefix_record_bop_insert(const char *key, const size_t nkey, const bool is_hit);
-void stats_prefix_record_bop_update(const char *key, const size_t nkey, const bool is_hit);
-void stats_prefix_record_bop_delete(const char *key, const size_t nkey, const bool is_hit);
-void stats_prefix_record_bop_incr(const char *key, const size_t nkey, const bool is_hit);
-void stats_prefix_record_bop_decr(const char *key, const size_t nkey, const bool is_hit);
-void stats_prefix_record_bop_get(const char *key, const size_t nkey, const bool is_hit);
-void stats_prefix_record_bop_count(const char *key, const size_t nkey, const bool is_hit);
-void stats_prefix_record_bop_position(const char *key, const size_t nkey, const bool is_hit);
-void stats_prefix_record_bop_pwg(const char *key, const size_t nkey, const bool is_hit);
-void stats_prefix_record_bop_gbp(const char *key, const size_t nkey, const bool is_hit);
-void stats_prefix_record_getattr(const char *key, const size_t nkey);
-void stats_prefix_record_setattr(const char *key, const size_t nkey);
-/*@null@*/
-char *stats_prefix_dump(token_t *tokens, const size_t ntokens, int *length);
-void stats_prefix_get(const char *prefix, const size_t nprefix, ADD_STAT add_stat, void *cookie);
+void stats_init(void);
+void server_stats(ADD_STAT add_stats, conn *c, bool aggregate);
+void process_stats_settings(ADD_STAT add_stats, void *c);
+#ifdef ENABLE_ZK_INTEGRATION
+void process_stats_zookeeper(ADD_STAT add_stats, void *c);
+#endif
+void update_stat_cas(conn *c, ENGINE_ERROR_CODE ret);
+void stats_reset(const void *cookie);
+
+
