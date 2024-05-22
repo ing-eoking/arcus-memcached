@@ -1,0 +1,36 @@
+name: 'Comment'
+description: 'Comment the static analysis result to PR'
+
+runs:
+  using: 'composite'
+  steps:
+    - uses: actions/github-script@v7
+      with:
+        script: |
+          function isNullOrUndefined(a) {
+            return a === null || a === undefined;
+          }
+          if (isNullOrUndefined(context) || isNullOrUndefined(context.issue) || isNullOrUndefined(context.issue.number)) {
+            return;
+          }
+
+          const fs = require('fs');
+          const output = fs.readFileSync('report.txt', 'utf8');
+          const jobName = process.env.GITHUB_JOB
+          const commentBody = `
+          <details>
+          <summary>${jobName} report</summary>
+
+          \`\`\`
+          ${output}
+          \`\`\`
+
+          </details>
+          `
+
+          github.rest.issues.createComment({
+            issue_number: context.issue.number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: commentBody
+          });

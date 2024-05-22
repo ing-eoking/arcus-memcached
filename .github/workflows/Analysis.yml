@@ -1,0 +1,25 @@
+name: Staic Analysis
+
+on:
+  push:
+      branches: [ "bug1" ]
+  pull_request:
+      branches: [ "develop", "master", "typo" ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  clang-analyze:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+      - name: Setup
+        uses: ./.github/actions/setup
+      - name: Run Clang Analyzer
+        run: scan-build make 2>./report.txt
+      - name: Comment Report To PR
+        uses: ./.github/actions/comment
