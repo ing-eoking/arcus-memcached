@@ -1,0 +1,26 @@
+name: 'Setup'
+description: 'Install apt packages and configure ARCUS Cache server.'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Install ARCUS Cache Server Dependency Packages
+      shell: bash
+      run: |
+        sudo apt-get update -qq
+        sudo apt-get install -qq build-essential autoconf automake libtool cppcheck clang clang-tools perl
+    - name: Cache ARCUS Cache Server Directory
+      id: arcus-cache
+      uses: actions/cache@v3.3.2
+      with:
+        path: ~/arcus
+        key: ${{runner.os}}-arcus
+    - name: Install ARCUS Cache Server Dependency Libraries
+      if: steps.arcus-cache.outputs.cache-hit != 'true'
+      shell: bash
+      run: ./deps/install.sh $HOME/arcus
+    - name: Configure ARCUS Cache Server
+      shell: bash
+      run: |
+        ./config/autorun.sh
+        ./configure --enable-zk-integration --with-zk-reconfig --with-libevent=${HOME}/arcus --with-zookeeper=${HOME}/arcus

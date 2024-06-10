@@ -1,0 +1,25 @@
+name: Cpp Analysis
+
+on:
+  push:
+      branches: [ ]
+  pull_request:
+      branches: [ "develop", "analysis" ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  clang-analyze:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+      - name: Setup
+        uses: ./.github/actions/setup
+      - name: Run Cppcheck
+        run: cppcheck --enable=warning --suppress=normalCheckLevelMaxBranches --std=c99 --output-file=./report.txt --inconclusive --library=posix --force ./
+      - name: Print Cppcheck
+        uses: ./.github/actions/comment
