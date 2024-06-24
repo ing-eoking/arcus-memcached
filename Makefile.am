@@ -24,6 +24,7 @@ pkginclude_HEADERS = \
 lib_LTLIBRARIES = ascii_scrub.la \
                   basic_engine_testsuite.la \
                   default_engine.la \
+                  vento_engine.la \
                   demo_engine.la \
                   example_protocol.la \
                   stdin_term_handler.la
@@ -119,6 +120,11 @@ memcached_SOURCES += $(default_engine_la_SOURCES)
 memcached_LDFLAGS += -export-dynamic
 endif
 
+if INCLUDE_VENTO_ENGINE
+memcached_SOURCES += $(vento_engine_la_SOURCES)
+memcached_LDFLAGS += -export-dynamic
+endif
+
 if INCLUDE_DEMO_ENGINE
 memcached_SOURCES += $(demo_engine_la_SOURCES)
 endif
@@ -180,6 +186,19 @@ default_engine_la_LIBADD= libmcd_util.la $(LIBM)
 default_engine_la_LDFLAGS= -avoid-version -shared -module -no-undefined
 dist_engineconf_DATA+= engines/default/default_engine.conf
 
+# The vento storage engine
+vento_engine_la_SOURCES= \
+                    engines/vento/vento_engine.c \
+                    engines/vento/vento_engine.h \
+                    engines/vento/vt_items.c \
+                    engines/vento/vt_items.h \
+                    engines/vento/vt_assoc.c \
+                    engines/vento/vt_assoc.h
+vento_engine_la_DEPENDENCIES= libmcd_util.la
+vento_engine_la_LIBADD= libmcd_util.la $(LIBM)
+vento_engine_la_LDFLAGS= -avoid-version -shared -module -no-undefined
+dist_engineconf_DATA+= engines/vento/vento_engine.conf
+
 # The demo storage engine
 demo_engine_la_SOURCES= \
                     engines/demo/demo_engine.c \
@@ -205,6 +224,10 @@ CLEANFILES += memcached_dtrace.o
 default_engine_la_LIBADD += default_engine_dtrace.lo
 default_engine_la_DEPENDENCIES += default_engine_dtrace.lo
 CLEANFILES += default_engine_dtrace.lo
+
+vento_engine_la_LIBADD += vento_engine_dtrace.lo
+vento_engine_la_DEPENDENCIES += vento_engine_dtrace.lo
+CLEANFILES += vento_engine_dtrace.lo
 
 demo_engine_la_LIBADD += demo_engine_dtrace.lo
 demo_engine_la_DEPENDENCIES += demo_engine_dtrace.lo

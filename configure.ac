@@ -225,6 +225,11 @@ AC_ARG_ENABLE(default-engine,
   [AS_HELP_STRING([--enable-default-engine], [Build-in default engine])])
 AM_CONDITIONAL([INCLUDE_DEFAULT_ENGINE],[test "$enable_default_engine" = "yes"])
 
+# vento engine
+AC_ARG_ENABLE(vento-engine,
+  [AS_HELP_STRING([--enable-vento-engine], [Build-in vento engine])])
+AM_CONDITIONAL([INCLUDE_VENTO_ENGINE],[test "$enable_vento_engine" = "yes"])
+
 # demo engine
 AC_ARG_ENABLE(demo-engine,
   [AS_HELP_STRING([--enable-demo-engine], [Build-in demo engine])])
