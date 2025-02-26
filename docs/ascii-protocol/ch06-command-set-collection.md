@@ -113,6 +113,9 @@ sop get <key> <count> [delete|drop]\r\n
 - delete or drop - element 조회하면서 그 element를 delete할 것인지,
 그리고 delete로 인해 empty set이 될 경우 그 set을 drop할 것인지를 지정한다.
 
+sop get 명령은 다음의 제약 사항을 가진다.
+- count의 최솟값은 0, 최댓값은 1000이다.
+
 성공 시의 response string은 아래와 같다.
 VALUE 라인의 \<count\>는 조회된 element 개수를 의미한다.
 마지막 라인은 END, DELETED, DELETED_DROPPED 중의 하나를 가지며
@@ -138,6 +141,7 @@ END|DELETED|DELETED_DROPPED\r\n
 | "UNREADABLE"                                         | 해당 item이 unreadable item임
 | "NOT_SUPPORTED"                                      | 지원하지 않음
 | "CLIENT_ERROR bad command line format"               | protocol syntax 틀림
+| "CLIENT_ERROR bad value"                             | sop get 명령의 제약 조건을 위배함
 | "SERVER_ERROR out of memory [writing get response]"  | 메모리 부족
 
 ## sop exist
