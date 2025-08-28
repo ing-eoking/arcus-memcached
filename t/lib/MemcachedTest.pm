@@ -1050,7 +1050,7 @@ sub free_port {
     my $port;
     my $netstat;
     while (!$sock) {
-        $port = int(rand(20000)) + 30000;
+        $port = 11211;
         $netstat = `netstat -tnau | grep $port`;
         if ($netstat eq "") {
             $sock = IO::Socket::INET->new(LocalAddr => '127.0.0.1',
