@@ -333,19 +333,21 @@ ENGINE_ERROR_CODE prefix_link(hash_item *it, const uint32_t item_size, bool *int
     const char *key = item_get_key(it);
     uint32_t   nkey = it->nkey;
     int prefix_depth = 0;
+    int offset = 0;
     int i = 0;
     char *token;
     prefix_t *pt = NULL;
     prefix_t_list_elem prefix_list[DEFAULT_PREFIX_MAX_DEPTH];
 
     // prefix discovering: we don't even know prefix existence at this time
-    while ((token = memchr(key+i+1, config->prefix_delimiter, nkey-i-1)) != NULL) {
-        i = token - key;
-        if (i > PREFIX_MAX_LENGTH) {
+    while ((token = memchr(key+offset+1, config->prefix_delimiter, nkey-offset-1)) != NULL) {
+        int len = token - key;
+        if (len > PREFIX_MAX_LENGTH) {
             return ENGINE_PREFIX_ENAME;
         }
 
-        prefix_list[prefix_depth].nprefix = i;
+        prefix_list[prefix_depth].nprefix = len - offset - 1;
+        offset = len;
 
         prefix_depth++;
         if (prefix_depth >= DEFAULT_PREFIX_MAX_DEPTH) {
@@ -360,50 +362,37 @@ ENGINE_ERROR_CODE prefix_link(hash_item *it, const uint32_t item_size, bool *int
         it->pfxptr = pt;
     } else {
         for (i = prefix_depth-1; i >= 0; i--) {
-            prefix_list[i].hash = svcore->hash(key, prefix_list[i].nprefix, 0);
-            pt = _prefix_find(key, prefix_list[i].nprefix, prefix_list[i].hash);
-            if (pt != NULL) break;
-#ifdef NESTED_PREFIX
-            if (i == 0) {
-                if (!mc_isvalidname(key, prefix_list[0].nprefix)) {
-                    return ENGINE_PREFIX_ENAME; /* Invalid prefix name */
-                }
-            } else {
-                uint32_t prefix_offset = prefix_list[i - 1].nprefix + 1;
-                if (!mc_isvalidname(key + prefix_offset,
-                                    prefix_list[i].nprefix - prefix_offset)) {
-                    return ENGINE_PREFIX_ENAME; /* Invalid prefix name */
-                }
+            prefix_list[i].hash = svcore->hash(key, offset, 0);
+            pt = _prefix_find(key, offset, prefix_list[i].hash);
+            if (pt != NULL) {
+                // need building prefixes
+                prefix_list[i].pt = pt;
+                break;
             }
-#endif
+
+            offset -= prefix_list[i].nprefix + 1;
+            if (!mc_isvalidname(key + offset + 1, prefix_list[i].nprefix)) {
+                return ENGINE_PREFIX_ENAME; /* Invalid prefix name */
+            }
         }
         if (i < (prefix_depth-1)) {
-#ifdef NESTED_PREFIX
-#else
-            if (prefix_depth == 1) {
-                if (!mc_isvalidname(key, prefix_list[0].nprefix)) {
-                    return ENGINE_PREFIX_ENAME; /* Invalid prefix name */
-                }
-            }
-#endif
-            // need building prefixes
-            if (pt != NULL && i >= 0) {
-                prefix_list[i].pt = pt; // i >= 0
-            }
             for (int j = i + 1; j < prefix_depth; j++) {
-                pt = (prefix_t*)malloc(sizeof(prefix_t) + prefix_list[j].nprefix + 1);
+                int len = offset + prefix_list[j].nprefix + 1;
+                pt = (prefix_t*)malloc(sizeof(prefix_t) + len + 1);
                 if (pt == NULL) {
                     for (j = j - 1; j >= i + 1; j--) {
                         assert(prefix_list[j].pt != NULL);
-                        _prefix_delete(key, prefix_list[j].nprefix, prefix_list[j].hash);
+                        _prefix_delete(key, offset, prefix_list[j].hash);
+                        offset -= prefix_list[j].nprefix + 1;
                     }
                     return ENGINE_ENOMEM;
                 }
                 // building a prefix_t
                 memset(pt, 0, sizeof(prefix_t));
-                memcpy(pt + 1, key, prefix_list[j].nprefix);
-                memcpy((char*)pt+sizeof(prefix_t)+prefix_list[j].nprefix, "\0", 1);
-                pt->nprefix = prefix_list[j].nprefix;
+                memcpy(pt + 1, key, len);
+                memcpy((char*)pt+sizeof(prefix_t)+len, "\0", 1);
+                pt->nprefix = len;
+                offset = len;
 #ifdef NESTED_PREFIX
                 if (PREFIX_IS_RSVD(key, prefix_list[0].nprefix)) {
                     pt->internal = 1; /* internal prefix */
