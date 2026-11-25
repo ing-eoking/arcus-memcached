@@ -15032,7 +15032,7 @@ static void usage(void)
 
 static void usage_license(void)
 {
-    printf(PACKAGE " " VERSION "\n\n");
+    printf(PACKAGE " " VERSION " (Arcus v1 by JaM2in)\n\n");
     printf(
     "Copyright (c) 2003, Danga Interactive, Inc. <http://www.danga.com/>\n"
     "All rights reserved.\n"
